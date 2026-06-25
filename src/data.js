@@ -22,7 +22,10 @@ export const meta = {
   generated: "2026-06-24",
 };
 
-export const sections = [
+// ── GUIDE ─────────────────────────────────────────────────────────────────
+// The 10 frontend-guide areas, audited against the monorepo. Read-only
+// "where do we stand" visibility. Grouped under a single Guide section.
+export const guideAreas = [
   {
     id: "architecture",
     label: "Architecture",
@@ -205,41 +208,78 @@ export const sections = [
     ],
   },
   {
-    id: "security",
-    label: "Security",
+    id: "security-web",
+    label: "Security · Web",
     color: "#e74c3c",
     responsibility:
-      "Defend against XSS/CSRF, lock down CORS, ship a Content-Security-Policy, and keep tokens out of JS-readable storage.",
+      "For the Next.js portals: enforce a verified server-side session, authorize every API route, ship a Content-Security-Policy, and keep auth state / PII out of JS-readable storage.",
     status: "gap",
     evidence: [
-      "`dangerouslySetInnerHTML` in ~61 source files, but DOMPurify/sanitize in 0 — unsanitized HTML injection surface.",
-      "No Content-Security-Policy configured in any next.config.",
-      "Tokens are server-side for web (good), but localStorage is used widely — needs an audit for anything sensitive.",
+      "Auth gate is a static boolean cookie — planner-portal/middleware.ts only checks `loggedInSuccessful === 'true'`, with no signed or verified session behind it.",
+      "POST /api/create-session mints an authenticated session from just an email in the request body — no password, no OTP, no environment guard.",
+      "Middleware exempts /api/* and routes like app/api/accounts/route.ts forward to Frappe with a shared FRAPPE_AUTH_TOKEN and no per-user check — GET returns all clients.",
+      "No Content-Security-Policy or security headers in either next.config.ts; both portals build with `ignoreBuildErrors` + `ignoreDuringBuilds`.",
+      "userInfo / userEmail / loggedInSuccessful are written to localStorage (storageHelper web) — JS-readable and XSS-exfiltratable.",
+      "Positives: 0 real dangerouslySetInnerHTML and 0 eval/new Function in app source (the earlier '61 files' figure was counting node_modules), and the web session cookies are httpOnly. The gap is auth design, not raw XSS sinks.",
     ],
     actionables: [
       {
         severity: "high",
-        title: "Sanitize every dangerouslySetInnerHTML",
+        title: "Lock down /api/create-session and the OTP bypass",
         detail:
-          "61 files inject raw HTML with zero sanitization. Route all of them through DOMPurify (or remove the raw injection). This is the highest-leverage XSS fix in the repo — a single stored-XSS in a fintech client portal is a serious incident.",
+          "create-session trusts a client-supplied email and sets session cookies. Require a verified credential/OTP exchange server-side or delete the endpoint, and remove the '010101' bypass in login/page.tsx (it leans on a public NEXT_PUBLIC_ENVIRONMENT flag). See Actionables → Security · Web for the full plan.",
       },
       {
         severity: "high",
-        title: "Ship a Content-Security-Policy",
+        title: "Authenticate + authorize every API route",
         detail:
-          "No CSP exists. Add a nonce-based CSP via Next headers/middleware, starting in Report-Only mode to find violations, then enforce. CSP is the backstop that neutralizes an injected script even if sanitization is missed.",
+          "Stop exempting /api/* in middleware. Verify the session, resolve the user, and enforce role/ownership before forwarding to Frappe. /api/accounts returning all clients on an unauthenticated GET is the first to fix.",
+      },
+      {
+        severity: "high",
+        title: "Replace the boolean session gate with a verified session",
+        detail:
+          "loggedInSuccessful='true' proves nothing. Move to a signed httpOnly session (or validate the Frappe sid server-side) and treat any client-set auth flag as untrusted.",
       },
       {
         severity: "med",
-        title: "Audit localStorage for sensitive data",
+        title: "Ship a CSP + security headers and re-enable build checks",
         detail:
-          "localStorage is JS-readable and XSS-exfiltratable. Confirm no tokens/PII live there (mobile reset-password flow flagged). Session material belongs in httpOnly cookies, not localStorage.",
+          "Add a nonce-based CSP (Report-Only → enforce) plus HSTS / frame-ancestors / X-Content-Type-Options via next.config headers(), and remove ignoreBuildErrors / ignoreDuringBuilds so type and lint regressions stop shipping silently.",
+      },
+    ],
+  },
+  {
+    id: "security-mobile",
+    label: "Security · Mobile",
+    color: "#c0392b",
+    responsibility:
+      "For the Expo app: never ship long-lived API credentials in the bundle, talk to a BFF instead of Frappe directly, and persist nothing sensitive in AsyncStorage.",
+    status: "gap",
+    evidence: [
+      "EXPO_PUBLIC_FRAPPE_TOKEN is referenced 174 times — a Frappe API token baked into the shipped JS bundle and extractable from the app binary.",
+      "Mobile calls Frappe directly (app/api/mf/frappeClient.ts) with that shared token; there is no server / BFF layer, so the token is the only thing between device and Frappe.",
+      "frappeClient.ts itself notes the token 'would move behind a BFF' on a real deployment — currently it does not.",
+      "AsyncStorage holds flow state (e.g. fipConsentDetails_*) and the reset-password flow stashes the email client-side; it is unencrypted, so confirm no tokens/PII land there.",
+    ],
+    actionables: [
+      {
+        severity: "high",
+        title: "Get the Frappe token out of the mobile bundle",
+        detail:
+          "EXPO_PUBLIC_* values ship to every device. Route mobile traffic through a BFF / server proxy that holds the token server-side and issues short-lived per-user sessions, exactly as the frappeClient.ts comment anticipates. See Actionables → Security · Mobile.",
       },
       {
         severity: "med",
-        title: "Confirm CORS allow-lists, not wildcards",
+        title: "Audit AsyncStorage for sensitive data",
         detail:
-          "For any credentialed API surface, ensure Access-Control-Allow-Origin is an explicit tenant allow-list, never `*` with credentials.",
+          "AsyncStorage is not encrypted. Keep tokens/PII out of it; for anything sensitive use expo-secure-store (Keychain / Keystore). Today it holds consent + flow state — verify nothing more.",
+      },
+      {
+        severity: "med",
+        title: "Add secret scanning so no EXPO_PUBLIC token is committed",
+        detail:
+          "Gate CI on a secret scan so an EXPO_PUBLIC_*_TOKEN or FRAPPE_AUTH_TOKEN can never re-enter the bundle once the BFF lands.",
       },
     ],
   },
@@ -326,6 +366,223 @@ export const sections = [
         title: "Define an offline strategy for the mobile client",
         detail:
           "The mobile app fetches Frappe directly. Decide per surface: cache-first vs network-first, and queue writes for Background Sync where a client may be mid-form on a flaky connection.",
+      },
+    ],
+  },
+];
+
+// Back-compat alias — older imports referenced `sections`.
+export const sections = guideAreas;
+
+// ── ACTIONABLES ─────────────────────────────────────────────────────────────
+// Forward-looking initiatives — things we can actually build next, each with a
+// goal, the rationale, and ordered steps. Distinct from the per-area
+// `actionables` above (which are audit findings); these are owned projects.
+export const actionables = [
+  {
+    id: "security-web",
+    label: "Security · Web",
+    color: "#ef4444",
+    effort: "High",
+    impact: "Critical",
+    goal:
+      "Close the authentication and authorization holes in planner-portal and client-portal: a forgeable boolean session gate, a session-minting endpoint that trusts a client email, and API routes that forward to Frappe with a shared token and no per-user check. These are exploitable today, not future risks.",
+    why: [
+      "POST /api/create-session (planner-portal/app/api/create-session/route.ts) mints an authenticated session from just an email in the request body — no password, no OTP, no environment guard. Anyone who can reach the URL can log in as any advisor.",
+      "Auth is gated on a static boolean cookie: middleware.ts only checks loggedInSuccessful === 'true'. It proves nothing — there is no signed/verified session behind it, and the client also writes the same flag to localStorage (storageHelper).",
+      "API routes are unprotected: middleware.ts exempts /api/* entirely, and routes like app/api/accounts/route.ts forward to Frappe with a shared FRAPPE_AUTH_TOKEN and zero per-user checks — GET returns all clients. Broken access control across both portals.",
+      "No Content-Security-Policy or security headers exist in either next.config.ts, and both portals build with ignoreBuildErrors + ignoreDuringBuilds, so type/lint-level regressions ship silently.",
+      "Worth keeping: there are 0 real dangerouslySetInnerHTML and 0 eval/new Function in app source (the earlier '61 files' figure was counting node_modules), and the web session cookies are httpOnly. The gap is auth design, not raw XSS sinks.",
+    ],
+    steps: [
+      {
+        severity: "high",
+        title: "Lock down /api/create-session and the OTP bypass",
+        detail:
+          "create-session must never trust a client-supplied email. Require a verified Frappe credential/OTP exchange server-side before setting cookies, or delete the endpoint. Remove the '010101' bypass in login/page.tsx — it relies on a public NEXT_PUBLIC_ENVIRONMENT flag and an unguarded endpoint, so it is effectively live in prod.",
+      },
+      {
+        severity: "high",
+        title: "Authenticate and authorize every API route",
+        detail:
+          "Stop exempting /api/* in middleware. Add a server-side guard (verify the session, resolve the user, enforce role/ownership) on each route before it forwards to Frappe. /api/accounts returning all clients on an unauthenticated GET is the canonical bug to fix first.",
+      },
+      {
+        severity: "high",
+        title: "Replace the boolean session gate with a verified session",
+        detail:
+          "loggedInSuccessful='true' carries no proof. Move to a signed, httpOnly session token (or validate the Frappe sid server-side) and check that in middleware. Treat any client-set auth flag as untrusted.",
+      },
+      {
+        severity: "med",
+        title: "Ship a Content-Security-Policy and security headers",
+        detail:
+          "Add a nonce-based CSP plus HSTS, X-Frame-Options/frame-ancestors, X-Content-Type-Options and Referrer-Policy via next.config headers() or middleware. Start CSP in Report-Only, then enforce. This is the backstop if any injection slips in later.",
+      },
+      {
+        severity: "med",
+        title: "Stop disabling type and lint checks at build",
+        detail:
+          "Remove ignoreBuildErrors and ignoreDuringBuilds from both next.config.ts. They let a whole class of correctness and security issues (unchecked inputs, wrong types on auth paths) reach production unflagged. Fix the backlog behind a one-time burn-down.",
+      },
+      {
+        severity: "med",
+        title: "Move auth state and PII out of localStorage",
+        detail:
+          "userInfo / userEmail / loggedInSuccessful in localStorage (storageHelper web) are JS-readable and XSS-exfiltratable, and let the client fake 'logged in' UI. Keep identity in httpOnly cookies; localStorage should hold only non-sensitive UI state.",
+      },
+      {
+        severity: "low",
+        title: "Add a SAST + dependency gate to CI",
+        detail:
+          "Run a SAST pass (e.g. semgrep) over the API + auth surface and a dependency audit on every PR, blocking, so the fixes above do not silently regress.",
+      },
+    ],
+  },
+  {
+    id: "security-mobile",
+    label: "Security · Mobile",
+    color: "#c0392b",
+    effort: "High",
+    impact: "Critical",
+    goal:
+      "Get the Frappe API token out of the Expo bundle and put a server layer between the mobile app and Frappe, so a decompiled app no longer yields a broad-privilege credential.",
+    why: [
+      "The mobile app embeds EXPO_PUBLIC_FRAPPE_TOKEN (174 references) and calls Frappe directly (app/api/mf/frappeClient.ts). EXPO_PUBLIC_* values are baked into the shipped JS bundle and extractable from the app binary — a single broad-privilege token leaks to every device.",
+      "There is no BFF / server route layer on mobile: the shared token is the only thing between the device and Frappe, and it is the same token for every user, so there is no per-user authorization.",
+      "frappeClient.ts already anticipates this ('On a real deployment these would move behind a BFF; for now they mirror the existing direct-Frappe calls').",
+      "AsyncStorage (used for fipConsentDetails_*, reset-password email, etc.) is unencrypted at rest, so anything sensitive placed there is readable on a compromised device.",
+    ],
+    steps: [
+      {
+        severity: "high",
+        title: "Route mobile through a BFF and kill the embedded token",
+        detail:
+          "Stand up a server proxy that holds the Frappe token server-side and exposes only the endpoints the app needs. The app authenticates the user and receives a short-lived per-user session; EXPO_PUBLIC_FRAPPE_TOKEN is deleted entirely.",
+      },
+      {
+        severity: "high",
+        title: "Issue short-lived, per-user sessions",
+        detail:
+          "Replace the single shared token with per-user tokens that expire and can be revoked, so authorization is scoped to the signed-in user instead of one omnipotent credential shared by every install.",
+      },
+      {
+        severity: "med",
+        title: "Audit AsyncStorage; use SecureStore for anything sensitive",
+        detail:
+          "AsyncStorage is not encrypted. Keep tokens/PII out of it and move any sensitive material (session tokens, consent identifiers) to expo-secure-store (Keychain / Keystore).",
+      },
+      {
+        severity: "low",
+        title: "Add secret scanning so no EXPO_PUBLIC token is committed",
+        detail:
+          "Gate CI on a secret scan so an EXPO_PUBLIC_*_TOKEN or FRAPPE_AUTH_TOKEN can never re-enter the bundle once the BFF lands.",
+      },
+    ],
+  },
+  {
+    id: "internationalization",
+    label: "Internationalization",
+    color: "#e91e63",
+    effort: "Medium",
+    impact: "High",
+    goal:
+      "Stand up a translation layer plus locale-aware formatting so the platform can ship in multiple Indian locales without retrofitting hardcoded strings later.",
+    why: [
+      "Zero translation infrastructure today — no i18next / react-intl / next-intl, and strings are hardcoded across all three apps (see Guide → i18n & Accessibility).",
+      "An Indian multi-tenant fintech will face Hindi + regional-language demand early; partners and regulators increasingly expect vernacular UX.",
+      "Retrofitting i18n after thousands of strings calcify is dramatically more expensive than adopting keys while the surface area is still small.",
+      "Currency/date formatting is currently ad-hoc; Intl.* gives correct INR grouping (lakh/crore) and locale dates for free.",
+    ],
+    steps: [
+      {
+        severity: "high",
+        title: "Pick the framework per platform",
+        detail:
+          "next-intl for the two Next.js App Router apps (planner-portal, client-portal); i18next/expo-localization for the Expo mobile app. Standardize on one message-catalog format (ICU MessageFormat) so copy is portable across all three.",
+      },
+      {
+        severity: "high",
+        title: "Wrap each app in a locale provider + thread locale through routing",
+        detail:
+          "Add the provider at the app shell, resolve the active locale from tenant config / Accept-Language / a user setting, and make it part of the route (e.g. /[locale]/...) so SSR renders the right language.",
+      },
+      {
+        severity: "med",
+        title: "Extract hardcoded strings into namespaced catalogs",
+        detail:
+          "Start with a single en-IN catalog and migrate strings domain by domain (auth, dashboard, portfolio). Namespacing keeps catalogs reviewable and lets translators work per area.",
+      },
+      {
+        severity: "med",
+        title: "Replace ad-hoc formatting with Intl.NumberFormat / Intl.DateTimeFormat",
+        detail:
+          "Centralize money/number/date formatting in shared helpers using Intl with the en-IN locale (INR symbol, lakh/crore grouping). Removes scattered toLocaleString / manual string concatenation.",
+      },
+      {
+        severity: "low",
+        title: "Add a lint/CI gate against new hardcoded JSX strings",
+        detail:
+          "Wire eslint-plugin-i18next (or react/jsx-no-literals) so new untranslated literals fail PR review, preventing regression once the catalogs exist.",
+      },
+      {
+        severity: "low",
+        title: "RTL-readiness pass",
+        detail:
+          "Switch to logical CSS properties (margin-inline, padding-inline) and `dir` propagation so a future RTL locale doesn't require a layout rewrite.",
+      },
+    ],
+  },
+  {
+    id: "theme-mode",
+    label: "Light / Dark Mode UI",
+    color: "#6c5ce7",
+    effort: "Medium",
+    impact: "Medium",
+    goal:
+      "Ship a token-driven theme system supporting light, dark, and system modes — layered on top of the existing tenant palette — with a user toggle and a no-flash persisted preference.",
+    why: [
+      "Tenant palettes already flow through packages/design-tokens, so a theme mode is a natural extension of infrastructure that exists rather than a greenfield system.",
+      "The Contrast Gate the docs promise (Guide → i18n & Accessibility) must validate BOTH light and dark palettes for WCAG AA — building dark mode forces that gate to be real.",
+      "Doing theming via semantic tokens eliminates the hardcoded hex colors scattered across components, which is also what makes per-tenant palettes safe.",
+      "Dark mode is now a baseline user expectation, especially for finance dashboards people read for long sessions.",
+    ],
+    steps: [
+      {
+        severity: "high",
+        title: "Define semantic color tokens with light + dark values",
+        detail:
+          "In packages/design-tokens, introduce role-based tokens (bg, surface, text, muted, border, accent) each carrying a light and a dark value, derived from the tenant palette. Components reference roles, never raw hex.",
+      },
+      {
+        severity: "high",
+        title: "Run both palettes through the Contrast Gate",
+        detail:
+          "Extend the promised Contrast Gate to check the generated light AND dark token sets against 4.5:1 (text) / 3:1 (non-text). A tenant palette that only passes in light mode must fail CI.",
+      },
+      {
+        severity: "med",
+        title: "Add a ThemeProvider that emits CSS variables on :root",
+        detail:
+          "Expose mode = light | dark | system and write the active token set as CSS custom properties. Components style against var(--bg) etc., so a mode switch is a single attribute flip with no re-render storms.",
+      },
+      {
+        severity: "med",
+        title: "Persist preference with no flash of wrong theme",
+        detail:
+          "Store the choice in a cookie (readable during SSR) and default to prefers-color-scheme. Set the initial theme attribute before hydration so the page never flashes the wrong palette.",
+      },
+      {
+        severity: "med",
+        title: "Migrate hardcoded component colors to semantic tokens",
+        detail:
+          "Sweep the apps for inline hex / fixed greys and replace with token references. This is the bulk of the work and the prerequisite for the toggle actually theming everything.",
+      },
+      {
+        severity: "low",
+        title: "Add the toggle control to the app shell",
+        detail:
+          "A small light/dark/system control in the header or settings, wired to the ThemeProvider. Last step — only meaningful once tokens and persistence are in place.",
       },
     ],
   },
