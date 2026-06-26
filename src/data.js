@@ -216,7 +216,7 @@ export const guideAreas = [
     status: "gap",
     evidence: [
       "Auth gate is a static boolean cookie — planner-portal/middleware.ts only checks `loggedInSuccessful === 'true'`, with no signed or verified session behind it.",
-      "POST /api/create-session mints an authenticated session from just an email in the request body — no password, no OTP, no environment guard.",
+      "POST /api/create-session sets valid auth cookies from just an email — no password, no OTP. The login UI only calls it behind a client-side non-prod check (NEXT_PUBLIC_ENVIRONMENT !== 'PROD'), but the route itself has no env/auth guard, so in prod it can still be hit directly (curl/Postman) to forge a session. The flag guards the button, not the endpoint.",
       "Middleware exempts /api/* and routes like app/api/accounts/route.ts forward to Frappe with a shared FRAPPE_AUTH_TOKEN and no per-user check — GET returns all clients.",
       "No Content-Security-Policy or security headers in either next.config.ts; both portals build with `ignoreBuildErrors` + `ignoreDuringBuilds`.",
       "userInfo / userEmail / loggedInSuccessful are written to localStorage (storageHelper web) — JS-readable and XSS-exfiltratable.",
@@ -388,8 +388,8 @@ export const actionables = [
     goal:
       "Close the authentication and authorization holes in planner-portal and client-portal: a forgeable boolean session gate, a session-minting endpoint that trusts a client email, and API routes that forward to Frappe with a shared token and no per-user check. These are exploitable today, not future risks.",
     why: [
-      "POST /api/create-session (planner-portal/app/api/create-session/route.ts) mints an authenticated session from just an email in the request body — no password, no OTP, no environment guard. Anyone who can reach the URL can log in as any advisor.",
-      "Auth is gated on a static boolean cookie: middleware.ts only checks loggedInSuccessful === 'true'. It proves nothing — there is no signed/verified session behind it, and the client also writes the same flag to localStorage (storageHelper).",
+      "POST /api/create-session (planner-portal/app/api/create-session/route.ts) sets valid auth cookies from just an email in the body — no password, no OTP. The login UI only calls it behind a non-prod check (NEXT_PUBLIC_ENVIRONMENT !== 'PROD'), but that guard is client-side and the route itself has no env/auth guard: the route ships in every environment, so in prod it can still be hit directly (curl/Postman) to forge a session as any advisor. The flag protects the button, not the endpoint.",
+      "Auth is gated on a static boolean cookie: middleware.ts only checks loggedInSuccessful === 'true' (and the matcher even excludes /api/*, so nothing inspects the call above). It proves nothing — there is no signed/verified session behind it, and the client also writes the same flag to localStorage (storageHelper).",
       "API routes are unprotected: middleware.ts exempts /api/* entirely, and routes like app/api/accounts/route.ts forward to Frappe with a shared FRAPPE_AUTH_TOKEN and zero per-user checks — GET returns all clients. Broken access control across both portals.",
       "No Content-Security-Policy or security headers exist in either next.config.ts, and both portals build with ignoreBuildErrors + ignoreDuringBuilds, so type/lint-level regressions ship silently.",
       "Worth keeping: there are 0 real dangerouslySetInnerHTML and 0 eval/new Function in app source (the earlier '61 files' figure was counting node_modules), and the web session cookies are httpOnly. The gap is auth design, not raw XSS sinks.",
